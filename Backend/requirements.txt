@@ -1,0 +1,70 @@
+# ─────────────────────────────────────────────
+# FastAPI and Web Framework
+# ─────────────────────────────────────────────
+fastapi==0.115.9
+uvicorn[standard]==0.34.2
+python-multipart==0.0.20
+starlette==0.45.3
+
+# ─────────────────────────────────────────────
+# Database and ORM
+# ─────────────────────────────────────────────
+sqlalchemy==2.0.41
+alembic==1.16.1
+psycopg2-binary==2.9.10
+greenlet==3.2.2
+
+# ─────────────────────────────────────────────
+# Authentication and Security
+# ─────────────────────────────────────────────
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-jose[cryptography]==3.3.0
+cryptography==45.0.3
+PyJWT==2.10.1
+
+# ─────────────────────────────────────────────
+# Pydantic and Data Validation
+# ─────────────────────────────────────────────
+pydantic==2.11.5
+pydantic-settings==2.9.1
+pydantic_core==2.33.2
+email-validator==2.2.0
+
+# ─────────────────────────────────────────────
+# HTTP Clients
+# ─────────────────────────────────────────────
+requests==2.32.3
+httpx==0.28.1
+
+# ─────────────────────────────────────────────
+# Utilities
+# ─────────────────────────────────────────────
+python-dotenv==1.1.0
+pytz==2025.2
+python-dateutil==2.9.0.post0
+orjson==3.10.18
+typing-extensions==4.13.2
+anyio==4.9.0
+click==8.2.1
+
+# ─────────────────────────────────────────────
+# Testing
+# ─────────────────────────────────────────────
+pytest==8.4.0
+
+
+langchain==1.2.10
+langchain-text-splitters==1.1.1
+langchain-community==0.4.1
+bs4==0.0.2
+
+langchain[openai]
+langchain[anthropic]
+langchain-openai==1.1.10
+langchain-core==1.2.17
+langchain-chroma==1.1.0
+pymupdf==1.27.1
+
+docx2txt==0.9
+unstructured==0.21.5

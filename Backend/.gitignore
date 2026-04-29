@@ -1,0 +1,190 @@
+# ─────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.sage.py
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ─────────────────────────────────────────────
+# Testing & Coverage
+# ─────────────────────────────────────────────
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# ─────────────────────────────────────────────
+# Environments & Secrets
+# ─────────────────────────────────────────────
+.env
+.env.*
+!.env_example
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ─────────────────────────────────────────────
+# Database & Migrations (runtime artifacts)
+# ─────────────────────────────────────────────
+*.db
+*.sqlite3
+*.sqlite3-journal
+
+# ─────────────────────────────────────────────
+# Project-Specific Runtime Directories
+# ─────────────────────────────────────────────
+# Uploaded files
+uploads/
+
+# ChromaDB vector store (generated at runtime)
+chroma_db/
+
+# Application logs
+logs/
+*.log
+
+# Admin / processed document storage
+admin_docs/
+hr_docs/
+docs/
+storage/
+project_doc/
+
+# ─────────────────────────────────────────────
+# Scratch / Local Dev Files
+# ─────────────────────────────────────────────
+command.txt
+simple_rag.py
+test_logging.py
+
+# ─────────────────────────────────────────────
+# IDEs & Editors
+# ─────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.spyderproject
+.spyproject
+.ropeproject
+.history/
+.zencoder/
+
+# ─────────────────────────────────────────────
+# OS & System Files
+# ─────────────────────────────────────────────
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ─────────────────────────────────────────────
+# Temporary Files
+# ─────────────────────────────────────────────
+*.tmp
+*.temp
+*.bak
+
+# ─────────────────────────────────────────────
+# Type Checkers & Linters
+# ─────────────────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.ruff_cache/
+
+# ─────────────────────────────────────────────
+# Package Managers (lock files — keep if binary pkg)
+# ─────────────────────────────────────────────
+#Pipfile.lock
+#uv.lock
+#poetry.lock
+#pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+__pypackages__/
+
+# ─────────────────────────────────────────────
+# Celery
+# ─────────────────────────────────────────────
+celerybeat-schedule
+celerybeat.pid
+
+# ─────────────────────────────────────────────
+# Documentation Builds
+# ─────────────────────────────────────────────
+docs/_build/
+/site
+
+# ─────────────────────────────────────────────
+# Jupyter / IPython
+# ─────────────────────────────────────────────
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# ─────────────────────────────────────────────
+# Miscellaneous
+# ─────────────────────────────────────────────
+.pypirc
+cython_debug/
+.pybuilder/
+target/
+local_settings.py
+instance/
+.webassets-cache
+.scrapy
