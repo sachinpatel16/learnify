@@ -94,7 +94,7 @@ Get a book with its uploaded chapters.
 ```json
 {
   "success": true,
-  "message": "Data fetched successfully",
+  "message": "Book fetched successfully",
   "data": {
     "id": "book_id",
     "title": "Class 10 Science NCERT",
@@ -192,6 +192,37 @@ List uploaded chapters for the book.
   "data": [ { "chapter_number": 5, "is_processed": true }, { "chapter_number": 6, "is_processed": false } ]
 }
 ```
+
+---
+
+### `POST /rag/books/{book_id}/chapters/{chapter_id}/process`
+Process an uploaded chapter (index into vector store for exam generation).
+
+**Params**
+- `book_id` (path)
+- `chapter_id` (path)
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "message": "Data fetched successfully",
+  "data": {
+    "id": "doc_id_5",
+    "book_id": "book_id",
+    "chapter_number": 5,
+    "chapter_title": "Light - Reflection and Refraction",
+    "status": "completed",
+    "is_processed": true,
+    "vector_namespace": "doc-abc12345"
+  }
+}
+```
+
+**Error examples**
+- `404` book/chapter not found
+- `400` processing validation error
+- `500` processing failed
 
 ---
 
@@ -297,6 +328,7 @@ Generate an exam from one Book and multiple chapter numbers.
 ```json
 {
   "book_id": "book_id",
+  "title": "Chapter 5 and 6 Unit Test",
   "chapters": [5, 6],
   "sections": [
     { "type": "mcq", "count": 10, "marks_each": 1 },
@@ -352,6 +384,23 @@ Get exam status and full stored record (paper included after completion).
 
 ---
 
+### `DELETE /rag/exams/{exam_id}`
+Delete an exam by id (works for pending/generating/completed/failed records).
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "message": "Exam deleted successfully",
+  "data": null
+}
+```
+
+**Error**
+- `404` exam not found
+
+---
+
 ### `GET /rag/exams/{exam_id}/paper`
 Student-facing exam paper view (no answers/explanations leaked).
 
@@ -383,6 +432,32 @@ Student-facing exam paper view (no answers/explanations leaked).
   }
 }
 ```
+
+---
+
+## Subjects
+
+### `GET /rag/subjects`
+List all managed subjects.
+
+### `POST /rag/subjects`
+Create a subject.
+
+**Body (JSON)**
+```json
+{
+  "name": "Maths",
+  "standard": "10",
+  "board": "NCERT",
+  "language": "en"
+}
+```
+
+### `PATCH /rag/subjects/{subject_id}`
+Update an existing subject.
+
+### `DELETE /rag/subjects/{subject_id}`
+Delete a subject (fails if linked books exist).
 
 **Error**
 - `409` exam not completed yet

@@ -2,10 +2,9 @@ import React, { useState } from 'react';
 import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import BooksPage from './components/pages/BooksPage';
-import ChatbotPage from './components/pages/ChatbotPage';
-import DocumentsPage from './components/pages/DocumentsPage';
+import ExamReaderPage from './components/pages/ExamReaderPage';
 
-type AppPage = 'books' | 'documents' | 'chat';
+type AppPage = 'books' | 'examReader';
 
 const AppContent: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<AppPage>('books');
@@ -13,10 +12,8 @@ const AppContent: React.FC = () => {
     switch (currentPage) {
       case 'books':
         return <BooksPage />;
-      case 'chat':
-        return <ChatbotPage />;
-      case 'documents':
-        return <DocumentsPage />;
+      case 'examReader':
+        return <ExamReaderPage />;
       default:
         return <BooksPage />;
     }

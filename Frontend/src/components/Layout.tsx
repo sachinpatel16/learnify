@@ -3,8 +3,7 @@ import {
   Menu,
   X,
   BookOpen,
-  FileText,
-  MessageSquare,
+  ClipboardList,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 
@@ -19,8 +18,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onPageChange }) 
 
   const navigation = [
     { name: 'Books & Exams', id: 'books', icon: BookOpen },
-    { name: 'Loose Documents', id: 'documents', icon: FileText },
-    { name: 'RAG Chat', id: 'chat', icon: MessageSquare },
+    { name: 'Exam Reader', id: 'examReader', icon: ClipboardList },
   ];
 
   return (
@@ -65,7 +63,7 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onPageChange }) 
           </nav>
           <div className="p-4 border-t border-gray-200 dark:border-gray-700">
             <div className="rounded-lg bg-gray-50 dark:bg-white/5 px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
-              Manage books, upload chapter PDFs, generate exams, and query loose RAG documents.
+              Manage books, upload chapter PDFs, and generate exams.
             </div>
             <div className="pt-3">
               <ThemeToggle showLabel />

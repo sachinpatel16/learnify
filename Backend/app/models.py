@@ -45,6 +45,21 @@ class Book(Base):
     )
 
 
+class Subject(Base):
+    """Managed subject catalog used by the Books UI."""
+
+    __tablename__ = "subjects"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False, unique=True)
+    standard = Column(String, nullable=True)
+    board = Column(String, nullable=True)
+    language = Column(String, nullable=True, default="en")
+
+    created_at = Column(DateTime, default=now_utc, nullable=False)
+    updated_at = Column(DateTime, default=now_utc, onupdate=now_utc, nullable=False)
+
+
 class Document(Base):
     """An uploaded document.
 
@@ -104,6 +119,7 @@ class Exam(Base):
         nullable=False,
         index=True,
     )
+    title = Column(String, nullable=True)
 
     spec = Column(JSONB, nullable=False)
     paper = Column(JSONB, nullable=True)

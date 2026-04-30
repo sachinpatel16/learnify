@@ -7,8 +7,7 @@ import {
   ExamAnswerKey,
   ExamPaperView,
   ExamSpec,
-  LooseDocument,
-  QueryResponse,
+  Subject,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
@@ -78,8 +77,46 @@ class APIService {
     });
   }
 
-  async getBooks(): Promise<Book[]> {
-    return this.request('/rag/books');
+  async getBooks(subjectFilter?: string): Promise<Book[]> {
+    const query = subjectFilter?.trim()
+      ? `?subject=${encodeURIComponent(subjectFilter.trim())}`
+      : '';
+    return this.request(`/rag/books${query}`);
+  }
+
+  async getSubjects(): Promise<Subject[]> {
+    return this.request('/rag/subjects');
+  }
+
+  async createSubject(payload: {
+    name: string;
+    standard?: string;
+    board?: string;
+    language?: string;
+  }): Promise<Subject> {
+    return this.request('/rag/subjects', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSubject(
+    subjectId: string,
+    payload: {
+      name?: string;
+      standard?: string;
+      board?: string;
+      language?: string;
+    }
+  ): Promise<Subject> {
+    return this.request(`/rag/subjects/${subjectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSubject(subjectId: string): Promise<null> {
+    return this.request(`/rag/subjects/${subjectId}`, { method: 'DELETE' });
   }
 
   async getBook(bookId: string): Promise<BookDetail> {
@@ -117,31 +154,9 @@ class APIService {
     return this.request(`/rag/books/${bookId}/exams`);
   }
 
-  async uploadLooseDocument(file: File): Promise<LooseDocument> {
-    const formData = new FormData();
-    formData.append('file', file);
-    return this.upload('/rag/documents', formData);
-  }
-
-  async processLooseDocument(docId: string): Promise<LooseDocument> {
-    return this.request(`/rag/documents/${docId}/process`, { method: 'POST' });
-  }
-
-  async getLooseDocuments(): Promise<LooseDocument[]> {
-    return this.request('/rag/documents');
-  }
-
-  async deleteLooseDocument(docId: string): Promise<null> {
-    return this.request(`/rag/documents/${docId}`, { method: 'DELETE' });
-  }
-
-  async queryDocuments(question: string, documentIds?: string[]): Promise<QueryResponse> {
-    return this.request('/rag/query', {
+  async processBookChapter(bookId: string, chapterId: string): Promise<ChapterDocument> {
+    return this.request(`/rag/books/${bookId}/chapters/${chapterId}/process`, {
       method: 'POST',
-      body: JSON.stringify({
-        question,
-        ...(documentIds && documentIds.length > 0 ? { document_ids: documentIds } : {}),
-      }),
     });
   }
 
@@ -162,6 +177,10 @@ class APIService {
 
   async getExamAnswerKey(examId: string): Promise<ExamAnswerKey> {
     return this.request(`/rag/exams/${examId}/answer-key`);
+  }
+
+  async deleteExam(examId: string): Promise<null> {
+    return this.request(`/rag/exams/${examId}`, { method: 'DELETE' });
   }
 
   async pollExamUntilSettled(

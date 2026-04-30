@@ -35,7 +35,7 @@
 @layer components {
   /* Button components */
   .btn-primary {
-    @apply bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white font-medium py-2 px-4 shadow-subtle-light dark:shadow-subtle-dark rounded-md transition-all duration-200 active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950;
+    @apply bg-primary-600 hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 text-white font-medium py-2 px-4 shadow-subtle-light dark:shadow-subtle-dark rounded-md transition-all duration-200 active:scale-[0.98] outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-950 disabled:cursor-not-allowed disabled:opacity-95 disabled:bg-primary-600 dark:disabled:bg-primary-500 disabled:text-white;
   }
   
   .btn-secondary {

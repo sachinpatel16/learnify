@@ -13,6 +13,7 @@ from app.models import Book, Document, Exam
 from app.response import (
     MSG_ANSWER_KEY_FETCHED,
     MSG_EXAM_CREATED,
+    MSG_EXAM_DELETED,
     MSG_EXAM_FETCHED,
     MSG_PAPER_FETCHED,
     success_response,
@@ -117,6 +118,7 @@ def create_exam(
 
     exam = Exam(
         book_id=book.id,
+        title=spec.title.strip(),
         spec=spec.model_dump(mode="json"),
         paper=None,
         total_marks=0,
@@ -142,6 +144,18 @@ def get_exam(exam_id: str, db: Session = Depends(get_db)):
     if exam is None:
         raise HTTPException(status_code=404, detail="Exam not found")
     return success_response(data=_exam_payload(exam), message=MSG_EXAM_FETCHED)
+
+
+@router.delete("/exams/{exam_id}")
+def delete_exam(exam_id: str, db: Session = Depends(get_db)):
+    """Delete an exam row by id regardless of status."""
+    exam = db.query(Exam).filter(Exam.id == exam_id).first()
+    if exam is None:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    db.delete(exam)
+    db.commit()
+    return success_response(data=None, message=MSG_EXAM_DELETED)
 
 
 # ── Paper / answer-key views ─────────────────────────────────────────────────
@@ -275,8 +289,27 @@ def _run_exam_generation(exam_id: str, snapshot: dict) -> None:
             db.commit()
             return
 
+        paper = result.get("paper") or {}
+        sections = paper.get("sections") or []
+        requested_total_questions = sum(int(s.count) for s in spec.sections)
+        generated_total_questions = sum(len(s.get("questions") or []) for s in sections)
+        requested_total_marks = sum(int(s.count) * int(s.marks_each) for s in spec.sections)
+        generated_total_marks = int(result.get("total_marks", 0))
+        if (
+            generated_total_questions != requested_total_questions
+            or generated_total_marks != requested_total_marks
+        ):
+            exam.status = "failed"
+            exam.error_message = (
+                "Generated exam does not match requested counts/marks. "
+                f"Requested questions={requested_total_questions}, generated={generated_total_questions}; "
+                f"requested marks={requested_total_marks}, generated={generated_total_marks}."
+            )
+            db.commit()
+            return
+
         exam.paper = result["paper"]
-        exam.total_marks = int(result["total_marks"])
+        exam.total_marks = generated_total_marks
         exam.status = "completed"
         exam.error_message = None
         db.commit()

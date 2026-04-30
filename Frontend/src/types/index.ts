@@ -15,6 +15,16 @@ export interface Book {
   updated_at: string;
 }
 
+export interface Subject {
+  id: string;
+  name: string;
+  standard?: string | null;
+  board?: string | null;
+  language?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ChapterDocument {
   id: string;
   book_id?: string | null;
@@ -30,17 +40,10 @@ export interface ChapterDocument {
   updated_at: string;
 }
 
-export type LooseDocument = ChapterDocument;
-
 export interface BookDetail extends Book {
   chapters: ChapterDocument[];
 }
 
-export interface QueryResponse {
-  answer: string;
-  context_found: boolean;
-  used_documents: string[];
-}
 
 export interface ExamSectionInput {
   type: 'mcq' | 'short_answer';
@@ -50,6 +53,7 @@ export interface ExamSectionInput {
 
 export interface ExamSpec {
   book_id: string;
+  title: string;
   chapters: number[];
   sections: ExamSectionInput[];
   difficulty: 'easy' | 'medium' | 'hard';
@@ -62,6 +66,7 @@ export interface ExamSpec {
 export interface Exam {
   id: string;
   book_id: string;
+  title?: string | null;
   spec: Record<string, unknown>;
   paper?: ExamPaperViewPayload | null;
   total_marks: number;

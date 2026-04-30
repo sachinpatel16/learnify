@@ -59,6 +59,7 @@ class _Candidate(TypedDict):
     chapter_title: str
     section_index: int
     payload: dict
+    target_section_index: int
 
 
 class ExamState(TypedDict, total=False):
@@ -486,93 +487,141 @@ class _ExamGenerator:
             logger.exception("Could not bind structured output to chat model")
             return {"error": f"LLM does not support structured output: {e}"}
 
-        candidates: list[_Candidate] = []
-        for ch_idx, ch in enumerate(chapters):
-            sub_sections = ch.get("sub_sections") or []
-            k = max(1, len(sub_sections))
-            mcq_ch_target = mcq_per_ch[ch_idx]
-            short_ch_target = short_per_ch[ch_idx]
-            mcq_per_sub = (
-                math.ceil(mcq_ch_target * self.over_generate / k) if mcq_ch_target else 0
-            )
-            short_per_sub = (
-                math.ceil(short_ch_target * self.over_generate / k) if short_ch_target else 0
-            )
+        def _count_by_type(items: list[_Candidate]) -> tuple[int, int]:
+            mcq_count = sum(1 for item in items if item["type"] == "mcq")
+            short_count = sum(1 for item in items if item["type"] == "short_answer")
+            return mcq_count, short_count
 
-            sys_msg = SystemMessage(
-                content=_build_system_prompt(spec, book, ch["chapter_title"])
-            )
-
-            for s_idx, section_text in enumerate(sub_sections):
-                if mcq_per_sub == 0 and short_per_sub == 0:
-                    continue
-                user_msg = HumanMessage(
-                    content=_build_user_prompt(
-                        section_text=section_text,
-                        n_mcq=mcq_per_sub,
-                        n_short=short_per_sub,
-                        short_marks=short_marks,
-                    )
+        def _run_generation_round(
+            round_mcq_per_ch: list[int],
+            round_short_per_ch: list[int],
+            factor: float,
+        ) -> list[_Candidate]:
+            generated: list[_Candidate] = []
+            for ch_idx, ch in enumerate(chapters):
+                sub_sections = ch.get("sub_sections") or []
+                k = max(1, len(sub_sections))
+                mcq_ch_target = round_mcq_per_ch[ch_idx]
+                short_ch_target = round_short_per_ch[ch_idx]
+                mcq_per_sub = math.ceil(mcq_ch_target * factor / k) if mcq_ch_target else 0
+                short_per_sub = (
+                    math.ceil(short_ch_target * factor / k) if short_ch_target else 0
                 )
-                batch: Optional[GeneratedBatch] = None
-                try:
-                    batch = llm.invoke([sys_msg, user_msg])
-                except (ValidationError, Exception) as e:
-                    logger.warning(
-                        f"Structured parse failed for ch{ch['chapter_number']} "
-                        f"section {s_idx}: {type(e).__name__}: {e}. "
-                        "Retrying with tolerant JSON normalization."
-                    )
 
-                if batch is None:
+                sys_msg = SystemMessage(
+                    content=_build_system_prompt(spec, book, ch["chapter_title"])
+                )
+
+                for s_idx, section_text in enumerate(sub_sections):
+                    if mcq_per_sub == 0 and short_per_sub == 0:
+                        continue
+                    user_msg = HumanMessage(
+                        content=_build_user_prompt(
+                            section_text=section_text,
+                            n_mcq=mcq_per_sub,
+                            n_short=short_per_sub,
+                            short_marks=short_marks,
+                        )
+                    )
+                    batch: Optional[GeneratedBatch] = None
                     try:
-                        raw_response = base_llm.invoke([sys_msg, user_msg])
-                        raw_content = getattr(raw_response, "content", str(raw_response))
-                        if not isinstance(raw_content, str):
-                            raw_content = str(raw_content)
-                        payload = _extract_json_object(raw_content)
-                        if payload is None:
-                            raise ValueError("No JSON object found in fallback model output")
-                        batch = _normalize_generated_batch(payload, short_marks=short_marks)
-                    except Exception as fallback_error:
+                        batch = llm.invoke([sys_msg, user_msg])
+                    except (ValidationError, Exception) as e:
                         logger.warning(
-                            f"Fallback parse failed for ch{ch['chapter_number']} "
-                            f"section {s_idx}: {type(fallback_error).__name__}: {fallback_error}"
+                            f"Structured parse failed for ch{ch['chapter_number']} "
+                            f"section {s_idx}: {type(e).__name__}: {e}. "
+                            "Retrying with tolerant JSON normalization."
+                        )
+
+                    if batch is None:
+                        try:
+                            raw_response = base_llm.invoke([sys_msg, user_msg])
+                            raw_content = getattr(raw_response, "content", str(raw_response))
+                            if not isinstance(raw_content, str):
+                                raw_content = str(raw_content)
+                            payload = _extract_json_object(raw_content)
+                            if payload is None:
+                                raise ValueError(
+                                    "No JSON object found in fallback model output"
+                                )
+                            batch = _normalize_generated_batch(
+                                payload, short_marks=short_marks
+                            )
+                        except Exception as fallback_error:
+                            logger.warning(
+                                f"Fallback parse failed for ch{ch['chapter_number']} "
+                                f"section {s_idx}: {type(fallback_error).__name__}: {fallback_error}"
+                            )
+                            continue
+
+                    if not batch.mcqs and not batch.short_answers:
+                        logger.info(
+                            f"ch{ch['chapter_number']} section {s_idx}: model returned "
+                            "no usable items after normalization"
                         )
                         continue
 
-                if not batch.mcqs and not batch.short_answers:
-                    logger.info(
-                        f"ch{ch['chapter_number']} section {s_idx}: model returned "
-                        "no usable items after normalization"
-                    )
-                    continue
+                    for mcq in (batch.mcqs[:mcq_per_sub] if mcq_per_sub else []):
+                        if not _is_valid_mcq(mcq):
+                            continue
+                        generated.append(
+                            {
+                                "type": "mcq",
+                                "chapter_number": int(ch["chapter_number"]),
+                                "chapter_title": ch["chapter_title"],
+                                "section_index": s_idx,
+                                "payload": mcq.model_dump(),
+                                "target_section_index": -1,
+                            }
+                        )
 
-                for mcq in (batch.mcqs[:mcq_per_sub] if mcq_per_sub else []):
-                    if not _is_valid_mcq(mcq):
-                        continue
-                    candidates.append(
-                        {
-                            "type": "mcq",
-                            "chapter_number": int(ch["chapter_number"]),
-                            "chapter_title": ch["chapter_title"],
-                            "section_index": s_idx,
-                            "payload": mcq.model_dump(),
-                        }
-                    )
+                    for sa in (batch.short_answers[:short_per_sub] if short_per_sub else []):
+                        if not _is_valid_short(sa):
+                            continue
+                        generated.append(
+                            {
+                                "type": "short_answer",
+                                "chapter_number": int(ch["chapter_number"]),
+                                "chapter_title": ch["chapter_title"],
+                                "section_index": s_idx,
+                                "payload": sa.model_dump(),
+                                "target_section_index": -1,
+                            }
+                        )
+            return generated
 
-                for sa in (batch.short_answers[:short_per_sub] if short_per_sub else []):
-                    if not _is_valid_short(sa):
-                        continue
-                    candidates.append(
-                        {
-                            "type": "short_answer",
-                            "chapter_number": int(ch["chapter_number"]),
-                            "chapter_title": ch["chapter_title"],
-                            "section_index": s_idx,
-                            "payload": sa.model_dump(),
-                        }
-                    )
+        candidates = _run_generation_round(mcq_per_ch, short_per_ch, self.over_generate)
+        max_recovery_rounds = 3
+        for recovery_round in range(1, max_recovery_rounds + 1):
+            mcq_generated, short_generated = _count_by_type(candidates)
+            mcq_missing = max(0, target_mcq - mcq_generated)
+            short_missing = max(0, target_short - short_generated)
+            if mcq_missing == 0 and short_missing == 0:
+                break
+
+            logger.info(
+                f"Generation deficit after round {recovery_round - 1}: "
+                f"mcq_missing={mcq_missing}, short_missing={short_missing}; "
+                f"running recovery round {recovery_round}"
+            )
+            if spec.per_chapter_distribution == "evenly_split":
+                recovery_mcq_per_ch = _allocate_evenly(mcq_missing, len(chapters))
+                recovery_short_per_ch = _allocate_evenly(short_missing, len(chapters))
+            else:
+                recovery_mcq_per_ch = _allocate_proportional(mcq_missing, weights)
+                recovery_short_per_ch = _allocate_proportional(short_missing, weights)
+
+            # Increase request pressure each round so large requests are more likely
+            # to be satisfied in a single API call.
+            factor = max(1.0, self.over_generate) + (0.6 * recovery_round)
+            recovery_candidates = _run_generation_round(
+                recovery_mcq_per_ch,
+                recovery_short_per_ch,
+                factor,
+            )
+            if not recovery_candidates:
+                break
+            candidates.extend(recovery_candidates)
 
         logger.info(f"Generated {len(candidates)} raw candidate(s) before dedup")
         if not candidates:
@@ -606,6 +655,28 @@ class _ExamGenerator:
             f"Dedup kept {len(kept)} of {len(candidates)} candidates "
             f"(threshold={self.dedup_threshold})"
         )
+        # Keep strict quality by default, but avoid over-pruning that prevents
+        # satisfying the requested exam shape.
+        try:
+            spec = ExamSpec.model_validate(state["spec"])
+            required_mcq = sum(s.count for s in spec.sections if s.type == "mcq")
+            required_short = sum(
+                s.count for s in spec.sections if s.type == "short_answer"
+            )
+            kept_mcq = sum(1 for c in kept if c["type"] == "mcq")
+            kept_short = sum(1 for c in kept if c["type"] == "short_answer")
+            if kept_mcq < required_mcq or kept_short < required_short:
+                raw_mcq = sum(1 for c in candidates if c["type"] == "mcq")
+                raw_short = sum(1 for c in candidates if c["type"] == "short_answer")
+                logger.info(
+                    "Dedup reduced candidates below requested counts; "
+                    f"using raw pool (raw mcq={raw_mcq}, raw short={raw_short}, "
+                    f"kept mcq={kept_mcq}, kept short={kept_short})"
+                )
+                return {"candidates": candidates}
+        except Exception:
+            # If spec parsing fails here, keep existing dedup behavior.
+            pass
         return {"candidates": kept}
 
     def _sample_to_spec(self, state: ExamState) -> ExamState:
@@ -620,18 +691,26 @@ class _ExamGenerator:
             by_type.setdefault(c["type"], []).append(c)
 
         selected: list[_Candidate] = []
-        for section in spec.sections:
+        for section_idx, section in enumerate(spec.sections):
             pool = by_type.get(section.type, [])
             picked = _spread_pick(pool, section.count)
             if len(picked) < section.count:
-                logger.warning(
-                    f"Only {len(picked)} {section.type} candidates available "
-                    f"(requested {section.count})"
-                )
+                return {
+                    "error": (
+                        f"Could not generate enough {section.type} questions. "
+                        f"Requested {section.count}, generated {len(picked)}. "
+                        "Try processed chapters with more content or reduce question counts."
+                    )
+                }
+            picked_ids = {id(item) for item in picked}
+            by_type[section.type] = [
+                item for item in by_type.get(section.type, []) if id(item) not in picked_ids
+            ]
             for cand in picked:
                 marked = {
                     **cand,
                     "payload": {**cand["payload"], "marks": section.marks_each},
+                    "target_section_index": section_idx,
                 }
                 selected.append(marked)  # type: ignore[arg-type]
 
@@ -650,8 +729,13 @@ class _ExamGenerator:
         q_no = 1
         total_marks = 0
 
-        for section in spec.sections:
-            picks = [c for c in selected if c["type"] == section.type][: section.count]
+        for section_idx, section in enumerate(spec.sections):
+            picks = [
+                c
+                for c in selected
+                if c["type"] == section.type
+                and int(c.get("target_section_index", -1)) == section_idx
+            ][: section.count]
 
             questions: list[dict[str, Any]] = []
             for c in picks:

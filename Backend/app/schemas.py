@@ -45,6 +45,45 @@ class BookResponse(BaseModel):
         return _utc_iso(v)
 
 
+# ── Subject ──────────────────────────────────────────────────────────────────
+
+
+class SubjectCreate(BaseModel):
+    """Body for ``POST /rag/subjects``."""
+
+    name: str = Field(..., min_length=1)
+    standard: Optional[str] = None
+    board: Optional[str] = None
+    language: Optional[str] = "en"
+
+
+class SubjectUpdate(BaseModel):
+    """Body for ``PATCH /rag/subjects/{subject_id}``."""
+
+    name: Optional[str] = Field(default=None, min_length=1)
+    standard: Optional[str] = None
+    board: Optional[str] = None
+    language: Optional[str] = None
+
+
+class SubjectResponse(BaseModel):
+    """A managed subject record."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    standard: Optional[str] = None
+    board: Optional[str] = None
+    language: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_serializer("created_at", "updated_at")
+    def _serialize_dt(self, v: datetime | None) -> str | None:
+        return _utc_iso(v)
+
+
 # ── Document (chapter or loose) ──────────────────────────────────────────────
 
 
@@ -120,6 +159,7 @@ class ExamSpec(BaseModel):
     """The request body for ``POST /rag/exams``."""
 
     book_id: str
+    title: str = Field(..., min_length=1, max_length=200)
     chapters: list[int] = Field(
         ...,
         min_length=1,
@@ -172,6 +212,7 @@ class ExamResponse(BaseModel):
 
     id: str
     book_id: str
+    title: Optional[str] = None
     spec: dict[str, Any]
     paper: Optional[dict[str, Any]] = None
     total_marks: int

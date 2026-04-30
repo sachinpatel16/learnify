@@ -41,6 +41,7 @@ MSG_CHAPTERS_FETCHED = "Chapters fetched successfully"
 # Exam-specific message constants
 MSG_EXAM_CREATED = "Exam generation started"
 MSG_EXAM_FETCHED = "Exam fetched successfully"
+MSG_EXAM_DELETED = "Exam deleted successfully"
 MSG_PAPER_FETCHED = "Paper fetched successfully"
 MSG_ANSWER_KEY_FETCHED = "Answer key fetched successfully"
 

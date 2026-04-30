@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from app.database import Base, engine
 from app.logger import get_logger
 from app.response import MSG_INTERNAL_ERROR
-from app.routes import book_routes, exam_routes, rag_routes
+from app.routes import book_routes, exam_routes
 
 logger = get_logger(__name__)
 
@@ -64,6 +64,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(rag_routes.router)
 app.include_router(book_routes.router)
 app.include_router(exam_routes.router)

@@ -13,15 +13,20 @@ from fastapi import (
     Form,
     HTTPException,
     UploadFile,
+    Query,
     status,
 )
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import UPLOAD_DIR
 from app.database import get_db
 from app.logger import get_logger
-from app.models import Book, Document, Exam
+from app.models import Book, Document, Exam, Subject
 from app.response import (
+    MSG_CREATED,
+    MSG_DELETED,
+    MSG_UPDATED,
     MSG_BOOK_CREATED,
     MSG_BOOK_DELETED,
     MSG_BOOK_FETCHED,
@@ -35,6 +40,9 @@ from app.schemas import (
     BookWithChapters,
     ChapterDocumentResponse,
     ExamResponse,
+    SubjectCreate,
+    SubjectResponse,
+    SubjectUpdate,
 )
 from app.utils import SUPPORTED_EXTENSIONS
 
@@ -69,11 +77,22 @@ def _exam_payload(exam: Exam) -> dict:
     return ExamResponse.model_validate(exam).model_dump(mode="json")
 
 
+def _subject_payload(subject: Subject) -> dict:
+    return SubjectResponse.model_validate(subject).model_dump(mode="json")
+
+
 def _get_book_or_404(db: Session, book_id: str) -> Book:
     book = db.query(Book).filter(Book.id == book_id).first()
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     return book
+
+
+def _get_subject_or_404(db: Session, subject_id: str) -> Subject:
+    subject = db.query(Subject).filter(Subject.id == subject_id).first()
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    return subject
 
 
 # ── Book endpoints ───────────────────────────────────────────────────────────
@@ -96,9 +115,21 @@ def create_book(payload: BookCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/books")
-def list_books(db: Session = Depends(get_db)):
+def list_books(
+    subject: Optional[str] = Query(default=None, min_length=1),
+    db: Session = Depends(get_db),
+):
     """List all books (newest first)."""
-    books = db.query(Book).order_by(Book.created_at.desc()).all()
+    query = db.query(Book)
+    if subject:
+        subject_value = subject.strip()
+        matched_subject = (
+            db.query(Subject).filter(func.lower(Subject.id) == subject_value.lower()).first()
+        )
+        if matched_subject is not None:
+            subject_value = matched_subject.name
+        query = query.filter(func.lower(Book.subject) == subject_value.lower())
+    books = query.order_by(Book.created_at.desc()).all()
     return success_response(
         data=[_book_payload(b) for b in books], message=MSG_FETCHED
     )
@@ -239,6 +270,56 @@ def list_chapters(book_id: str, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/books/{book_id}/chapters/{chapter_id}/process")
+def process_book_chapter(book_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    """Process a chapter document that belongs to the given book."""
+    book = _get_book_or_404(db, book_id)
+    chapter = (
+        db.query(Document)
+        .filter(Document.id == chapter_id, Document.book_id == book.id)
+        .first()
+    )
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="Chapter not found for this book")
+
+    chapter.status = "processing"
+    chapter.error_message = None
+    db.commit()
+
+    from app.utils import rag_pipeline
+
+    try:
+        namespace = rag_pipeline.process(
+            filepath=chapter.path,
+            doc_id=chapter.id,
+            chapter_number=chapter.chapter_number,
+            chapter_title=chapter.chapter_title,
+        )
+    except FileNotFoundError as e:
+        chapter.status = "failed"
+        chapter.error_message = str(e)
+        db.commit()
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        chapter.status = "failed"
+        chapter.error_message = str(e)
+        db.commit()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("Failed to process chapter %s", chapter_id)
+        chapter.status = "failed"
+        chapter.error_message = str(e)
+        db.commit()
+        raise HTTPException(status_code=500, detail="Failed to process chapter") from e
+
+    chapter.vector_namespace = namespace
+    chapter.is_processed = True
+    chapter.status = "completed"
+    db.commit()
+    db.refresh(chapter)
+    return success_response(data=_chapter_payload(chapter), message=MSG_FETCHED)
+
+
 @router.get("/books/{book_id}/exams")
 def list_book_exams(book_id: str, db: Session = Depends(get_db)):
     """List all generated exams for a given book (newest first)."""
@@ -252,3 +333,85 @@ def list_book_exams(book_id: str, db: Session = Depends(get_db)):
     return success_response(
         data=[_exam_payload(e) for e in exams], message=MSG_FETCHED
     )
+
+
+# ── Subject endpoints ────────────────────────────────────────────────────────
+
+
+@router.get("/subjects")
+def list_subjects(db: Session = Depends(get_db)):
+    subjects = db.query(Subject).order_by(Subject.name.asc()).all()
+    return success_response(data=[_subject_payload(s) for s in subjects], message=MSG_FETCHED)
+
+
+@router.post("/subjects", status_code=status.HTTP_201_CREATED)
+def create_subject(payload: SubjectCreate, db: Session = Depends(get_db)):
+    name = payload.name.strip()
+    existing = db.query(Subject).filter(func.lower(Subject.name) == name.lower()).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Subject already exists")
+
+    subject = Subject(
+        name=name,
+        standard=payload.standard.strip() if payload.standard else None,
+        board=payload.board.strip() if payload.board else None,
+        language=(payload.language or "en").strip() or "en",
+    )
+    db.add(subject)
+    db.commit()
+    db.refresh(subject)
+    return success_response(data=_subject_payload(subject), message=MSG_CREATED)
+
+
+@router.patch("/subjects/{subject_id}")
+def update_subject(subject_id: str, payload: SubjectUpdate, db: Session = Depends(get_db)):
+    subject = _get_subject_or_404(db, subject_id)
+    old_name = subject.name
+
+    if payload.name is not None:
+        new_name = payload.name.strip()
+        existing = (
+            db.query(Subject)
+            .filter(func.lower(Subject.name) == new_name.lower(), Subject.id != subject.id)
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Subject already exists")
+        subject.name = new_name
+
+    if payload.standard is not None:
+        subject.standard = payload.standard.strip() or None
+    if payload.board is not None:
+        subject.board = payload.board.strip() or None
+    if payload.language is not None:
+        subject.language = payload.language.strip() or None
+
+    db.commit()
+
+    # Keep book subject labels aligned with managed subject rename.
+    if payload.name is not None and old_name != subject.name:
+        db.query(Book).filter(func.lower(Book.subject) == old_name.lower()).update(
+            {"subject": subject.name},
+            synchronize_session=False,
+        )
+        db.commit()
+
+    db.refresh(subject)
+    return success_response(data=_subject_payload(subject), message=MSG_UPDATED)
+
+
+@router.delete("/subjects/{subject_id}")
+def delete_subject(subject_id: str, db: Session = Depends(get_db)):
+    subject = _get_subject_or_404(db, subject_id)
+    linked_books = (
+        db.query(Book.id).filter(func.lower(Book.subject) == subject.name.lower()).count()
+    )
+    if linked_books > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete subject. {linked_books} book(s) are linked to it.",
+        )
+
+    db.delete(subject)
+    db.commit()
+    return success_response(data=None, message=MSG_DELETED)
