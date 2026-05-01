@@ -36,6 +36,7 @@ MSG_BOOK_CREATED = "Book created successfully"
 MSG_BOOK_FETCHED = "Book fetched successfully"
 MSG_BOOK_DELETED = "Book deleted successfully"
 MSG_CHAPTER_UPLOADED = "Chapter uploaded successfully"
+MSG_CHAPTER_PROCESS_STARTED = "Chapter processing started"
 MSG_CHAPTERS_FETCHED = "Chapters fetched successfully"
 
 # Exam-specific message constants

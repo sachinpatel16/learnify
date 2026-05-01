@@ -1,9 +1,12 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
+from app.config import ALLOWED_ORIGINS, CHROMA_DIR, UPLOAD_DIR
 from app.database import Base, engine
 from app.logger import get_logger
 from app.response import MSG_INTERNAL_ERROR
@@ -21,6 +24,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logger.info("RAG service started.")
     yield
+    engine.dispose(close=True)
     logger.info("RAG service stopped.")
 
 
@@ -58,11 +62,34 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready():
+    """Readiness: database and configured storage paths reachable."""
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    for path_name, base in ("UPLOAD_DIR", UPLOAD_DIR), ("CHROMA_DIR", CHROMA_DIR):
+        try:
+            if not os.access(base, os.W_OK):
+                raise HTTPException(status_code=503, detail=f"{path_name} not writable")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"{path_name}: {e}") from e
+
+    return {"status": "ready"}
+
 
 app.include_router(book_routes.router)
 app.include_router(exam_routes.router)

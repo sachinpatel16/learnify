@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -16,11 +17,12 @@ from fastapi import (
     Query,
     status,
 )
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import UPLOAD_DIR
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.logger import get_logger
 from app.models import Book, Document, Exam, Subject
 from app.response import (
@@ -30,6 +32,7 @@ from app.response import (
     MSG_BOOK_CREATED,
     MSG_BOOK_DELETED,
     MSG_BOOK_FETCHED,
+    MSG_CHAPTER_PROCESS_STARTED,
     MSG_CHAPTER_UPLOADED,
     MSG_FETCHED,
     success_response,
@@ -93,6 +96,125 @@ def _get_subject_or_404(db: Session, subject_id: str) -> Subject:
     if subject is None:
         raise HTTPException(status_code=404, detail="Subject not found")
     return subject
+
+
+def _persist_chapter_upload(
+    book_id: str,
+    filename: str,
+    ext: str,
+    contents: bytes,
+    chapter_number: int,
+    chapter_title: str,
+    display_name_optional: Optional[str],
+) -> dict:
+    """DB + filesystem work for chapter upload (runs in a worker thread)."""
+    db = SessionLocal()
+    try:
+        book = db.query(Book).filter(Book.id == book_id).first()
+        if book is None:
+            raise HTTPException(status_code=404, detail="Book not found")
+
+        existing = (
+            db.query(Document)
+            .filter(
+                Document.book_id == book.id,
+                Document.chapter_number == chapter_number,
+            )
+            .first()
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Chapter {chapter_number} already exists for this book "
+                    f"(document {existing.id}). Delete it first or pick a different number."
+                ),
+            )
+
+        doc_id = str(uuid.uuid4())
+        safe_name = f"{doc_id}{ext}"
+        saved_path = os.path.join(UPLOAD_DIR, safe_name)
+
+        try:
+            with open(saved_path, "wb") as out:
+                out.write(contents)
+        except Exception as e:
+            logger.error("Failed to save uploaded file '%s': %s", filename, e)
+            raise HTTPException(status_code=500, detail="Failed to save uploaded file") from e
+
+        title_clean = chapter_title.strip()
+        readable = (
+            (display_name_optional or "").strip() or f"Chapter {chapter_number} - {title_clean}"
+        )
+
+        document = Document(
+            id=doc_id,
+            filename=filename,
+            path=saved_path,
+            book_id=book.id,
+            chapter_number=int(chapter_number),
+            chapter_title=title_clean,
+            display_name=readable,
+            is_processed=False,
+            status="pending",
+        )
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+        return _chapter_payload(document)
+    finally:
+        db.close()
+
+
+def _run_book_chapter_process(book_id: str, chapter_id: str) -> None:
+    from app.utils import rag_pipeline
+
+    db = SessionLocal()
+    try:
+        book = db.query(Book).filter(Book.id == book_id).first()
+        if book is None:
+            logger.error("Book %s missing before chapter embedding", book_id)
+            return
+        chapter = (
+            db.query(Document)
+            .filter(Document.id == chapter_id, Document.book_id == book.id)
+            .first()
+        )
+        if chapter is None:
+            logger.error("Chapter %s missing before embedding", chapter_id)
+            return
+
+        try:
+            namespace = rag_pipeline.process(
+                filepath=chapter.path,
+                doc_id=chapter.id,
+                chapter_number=chapter.chapter_number,
+                chapter_title=chapter.chapter_title,
+            )
+        except FileNotFoundError as e:
+            chapter.status = "failed"
+            chapter.error_message = str(e)
+            db.commit()
+            return
+        except ValueError as e:
+            chapter.status = "failed"
+            chapter.error_message = str(e)
+            db.commit()
+            return
+        except Exception as e:
+            logger.exception("Failed to process chapter %s", chapter_id)
+            chapter.status = "failed"
+            chapter.error_message = str(e)
+            db.commit()
+            return
+
+        chapter.vector_namespace = namespace
+        chapter.is_processed = True
+        chapter.status = "completed"
+        chapter.error_message = None
+        db.commit()
+    finally:
+        db.close()
 
 
 # ── Book endpoints ───────────────────────────────────────────────────────────
@@ -181,7 +303,6 @@ async def upload_chapter(
     chapter_number: int = Form(..., ge=1),
     chapter_title: str = Form(..., min_length=1),
     display_name: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
 ):
     """Upload one chapter PDF (or other supported file) to a book.
 
@@ -189,8 +310,6 @@ async def upload_chapter(
     auto-detect. A readable ``display_name`` like 'Chapter 5 - Light' is
     auto-built when the caller doesn't provide one.
     """
-    book = _get_book_or_404(db, book_id)
-
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
@@ -204,56 +323,18 @@ async def upload_chapter(
             ),
         )
 
-    existing = (
-        db.query(Document)
-        .filter(
-            Document.book_id == book.id,
-            Document.chapter_number == chapter_number,
-        )
-        .first()
+    contents = await file.read()
+    payload = await run_in_threadpool(
+        _persist_chapter_upload,
+        book_id,
+        file.filename,
+        ext,
+        contents,
+        chapter_number,
+        chapter_title,
+        display_name,
     )
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Chapter {chapter_number} already exists for this book "
-                f"(document {existing.id}). Delete it first or pick a different number."
-            ),
-        )
-
-    doc_id = str(uuid.uuid4())
-    safe_name = f"{doc_id}{ext}"
-    saved_path = os.path.join(UPLOAD_DIR, safe_name)
-
-    try:
-        contents = await file.read()
-        with open(saved_path, "wb") as out:
-            out.write(contents)
-    except Exception as e:
-        logger.error(f"Failed to save uploaded file '{file.filename}': {e}")
-        raise HTTPException(status_code=500, detail="Failed to save uploaded file") from e
-
-    title_clean = chapter_title.strip()
-    readable = (display_name or "").strip() or f"Chapter {chapter_number} - {title_clean}"
-
-    document = Document(
-        id=doc_id,
-        filename=file.filename,
-        path=saved_path,
-        book_id=book.id,
-        chapter_number=int(chapter_number),
-        chapter_title=title_clean,
-        display_name=readable,
-        is_processed=False,
-        status="pending",
-    )
-    db.add(document)
-    db.commit()
-    db.refresh(document)
-
-    return success_response(
-        data=_chapter_payload(document), message=MSG_CHAPTER_UPLOADED
-    )
+    return success_response(data=payload, message=MSG_CHAPTER_UPLOADED)
 
 
 @router.get("/books/{book_id}/chapters")
@@ -270,9 +351,17 @@ def list_chapters(book_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/books/{book_id}/chapters/{chapter_id}/process")
-def process_book_chapter(book_id: str, chapter_id: str, db: Session = Depends(get_db)):
-    """Process a chapter document that belongs to the given book."""
+@router.post(
+    "/books/{book_id}/chapters/{chapter_id}/process",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def process_book_chapter(
+    book_id: str,
+    chapter_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Enqueue embedding for a chapter; poll the book or chapter list for status."""
     book = _get_book_or_404(db, book_id)
     chapter = (
         db.query(Document)
@@ -285,39 +374,13 @@ def process_book_chapter(book_id: str, chapter_id: str, db: Session = Depends(ge
     chapter.status = "processing"
     chapter.error_message = None
     db.commit()
-
-    from app.utils import rag_pipeline
-
-    try:
-        namespace = rag_pipeline.process(
-            filepath=chapter.path,
-            doc_id=chapter.id,
-            chapter_number=chapter.chapter_number,
-            chapter_title=chapter.chapter_title,
-        )
-    except FileNotFoundError as e:
-        chapter.status = "failed"
-        chapter.error_message = str(e)
-        db.commit()
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        chapter.status = "failed"
-        chapter.error_message = str(e)
-        db.commit()
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        logger.exception("Failed to process chapter %s", chapter_id)
-        chapter.status = "failed"
-        chapter.error_message = str(e)
-        db.commit()
-        raise HTTPException(status_code=500, detail="Failed to process chapter") from e
-
-    chapter.vector_namespace = namespace
-    chapter.is_processed = True
-    chapter.status = "completed"
-    db.commit()
     db.refresh(chapter)
-    return success_response(data=_chapter_payload(chapter), message=MSG_FETCHED)
+
+    background_tasks.add_task(_run_book_chapter_process, book_id, chapter_id)
+
+    return success_response(
+        data=_chapter_payload(chapter), message=MSG_CHAPTER_PROCESS_STARTED
+    )
 
 
 @router.get("/books/{book_id}/exams")

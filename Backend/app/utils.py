@@ -1,7 +1,10 @@
 """RAG pipeline: document loading, chunking (chapter-aware when applicable), embedding, retrieval."""
 
+import collections
+import concurrent.futures
 import hashlib
 import os
+import time
 from typing import Callable, Optional
 
 import chromadb
@@ -19,7 +22,13 @@ from langchain_community.document_loaders import (
 from langchain_core.documents import Document as LCDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import CHROMA_DIR, get_embeddings
+from app.config import (
+    CHROMA_DIR,
+    EXAM_CHAPTER_CACHE_MAX_ITEMS,
+    EXAM_CHAPTER_CACHE_TTL_SECONDS,
+    RAG_QUERY_MAX_WORKERS,
+    get_embeddings,
+)
 from app.logger import get_logger
 
 logger = get_logger(__name__)
@@ -92,6 +101,9 @@ class RagPipeline:
             length_function=len,
             add_start_index=True,
         )
+        self._chapter_text_cache: collections.OrderedDict[
+            tuple[str, int], tuple[float, str]
+        ] = collections.OrderedDict()
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -174,6 +186,15 @@ class RagPipeline:
         """
         if not namespace:
             return ""
+        cache_key = (namespace, int(chapter_number))
+        now = time.time()
+        cached = self._chapter_text_cache.get(cache_key)
+        if cached is not None:
+            expires_at, cached_text = cached
+            if now < expires_at:
+                self._chapter_text_cache.move_to_end(cache_key)
+                return cached_text
+            self._chapter_text_cache.pop(cache_key, None)
         try:
             collection = self._client.get_collection(name=namespace)
         except ValueError:
@@ -200,7 +221,16 @@ class RagPipeline:
 
         pairs = list(zip(docs, metas))
         pairs.sort(key=lambda p: (p[1] or {}).get("start_index", 0))
-        return "\n\n".join(text for text, _ in pairs if text)
+        chapter_text = "\n\n".join(text for text, _ in pairs if text)
+        self._chapter_text_cache[cache_key] = (
+            now + max(1, EXAM_CHAPTER_CACHE_TTL_SECONDS),
+            chapter_text,
+        )
+        self._chapter_text_cache.move_to_end(cache_key)
+        max_items = max(1, EXAM_CHAPTER_CACHE_MAX_ITEMS)
+        while len(self._chapter_text_cache) > max_items:
+            self._chapter_text_cache.popitem(last=False)
+        return chapter_text
 
     def query(
         self,
@@ -217,11 +247,31 @@ class RagPipeline:
         k = top_k if top_k is not None else self.top_k
         threshold = score_threshold if score_threshold is not None else self.score_threshold
 
-        all_contexts: list[str] = []
-        for namespace in namespaces:
-            context = self._query_namespace(question, namespace, k, threshold)
-            if context:
-                all_contexts.append(context)
+        max_workers = min(len(namespaces), max(1, RAG_QUERY_MAX_WORKERS))
+
+        def _hit(ns: str) -> Optional[str]:
+            return self._query_namespace(question, ns, k, threshold)
+
+        if max_workers <= 1 or len(namespaces) == 1:
+            all_contexts = [ctx for ctx in (_hit(ns) for ns in namespaces) if ctx]
+        else:
+            results: list[Optional[str]] = [None] * len(namespaces)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_index = {
+                    executor.submit(_hit, namespaces[i]): i for i in range(len(namespaces))
+                }
+                for fut in concurrent.futures.as_completed(future_index):
+                    idx = future_index[fut]
+                    try:
+                        results[idx] = fut.result()
+                    except Exception as e:
+                        logger.error(
+                            "Parallel query failed for namespace %s: %s",
+                            namespaces[idx],
+                            e,
+                        )
+                        results[idx] = None
+            all_contexts = [ctx for ctx in results if ctx]
 
         if not all_contexts:
             return None
