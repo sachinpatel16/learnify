@@ -24,6 +24,20 @@ All endpoints use a common response envelope.
 
 ---
 
+## API surface
+
+The FastAPI app exposes:
+
+- **`GET /health`** — Liveness (no database call).
+- **`GET /ready`** — Readiness: database ping and checks that configured `UPLOAD_DIR` and `CHROMA_DIR` are writable (returns `503` if a path is missing or not writable).
+
+**`/rag/*` routes** (same envelope as above) are mounted from two routers in `app/main.py`:
+
+- **Books / subjects / chapters** — `book_routes`: books, chapter upload and processing, per-book exam list, subjects CRUD.
+- **Exams** — `exam_routes`: generate exams, poll status (`GET /rag/exams/{exam_id}`), **long-poll** while pending/generating (`GET /rag/exams/{exam_id}/wait`), student paper, answer key.
+
+---
+
 ## Books (chapter-based uploads)
 
 ### `POST /rag/books`
@@ -196,25 +210,25 @@ List uploaded chapters for the book.
 ---
 
 ### `POST /rag/books/{book_id}/chapters/{chapter_id}/process`
-Process an uploaded chapter (index into vector store for exam generation).
+Process an uploaded chapter (enqueue embedding into the vector store for exam generation). Processing runs in the background; poll `GET /rag/books/{book_id}/chapters` or `GET /rag/books/{book_id}` for `is_processed` / `status`.
 
 **Params**
 - `book_id` (path)
 - `chapter_id` (path)
 
-**Response (200)**
+**Response (202)**
 ```json
 {
   "success": true,
-  "message": "Data fetched successfully",
+  "message": "Chapter processing started",
   "data": {
     "id": "doc_id_5",
     "book_id": "book_id",
     "chapter_number": 5,
     "chapter_title": "Light - Reflection and Refraction",
-    "status": "completed",
-    "is_processed": true,
-    "vector_namespace": "doc-abc12345"
+    "status": "processing",
+    "is_processed": false,
+    "vector_namespace": null
   }
 }
 ```
@@ -227,94 +241,28 @@ Process an uploaded chapter (index into vector store for exam generation).
 ---
 
 ### `GET /rag/books/{book_id}/exams`
-List generated exams for the book.
+List generated exams for the book (newest first). Each item is a full exam record: `id`, `book_id`, `title`, `spec`, `paper` (when completed), `total_marks`, `status`, `error_message`, `created_at`, `updated_at`.
 
 **Response (200)**
 ```json
 {
   "success": true,
   "message": "Data fetched successfully",
-  "data": [ { "id": "exam_id", "status": "completed" } ]
+  "data": [
+    {
+      "id": "exam_id",
+      "book_id": "book_id",
+      "title": "Chapter 5 and 6 Unit Test",
+      "spec": { },
+      "paper": null,
+      "total_marks": 0,
+      "status": "pending",
+      "error_message": null,
+      "created_at": "2026-04-29T00:00:00+00:00",
+      "updated_at": "2026-04-29T00:00:00+00:00"
+    }
+  ]
 }
-```
-
----
-
-## Documents (loose upload for Q&A)
-
-These endpoints are for “loose” RAG files (not tied to a book/chapter).
-
-### `POST /rag/documents`
-Upload a loose document for Q&A.
-
-**Body (multipart/form-data)**
-- `file` (required)
-
-**Response (201)**
-```json
-{
-  "success": true,
-  "message": "Document uploaded successfully",
-  "data": { "id": "doc_id", "filename": "book.txt", "status": "pending" }
-}
-```
-
----
-
-### `POST /rag/documents/{doc_id}/process`
-Embed the loose document into Chroma for Q&A.
-
-**Params**
-- `doc_id` (path)
-
-**Response (200)**
-```json
-{
-  "success": true,
-  "message": "Document processed successfully",
-  "data": { "id": "doc_id", "is_processed": true, "vector_namespace": "doc-..." }
-}
-```
-
----
-
-### `GET /rag/documents`
-List loose documents.
-
----
-
-### `POST /rag/query`
-Ask a question using similarity retrieval over processed loose documents.
-
-**Body (JSON)**
-```json
-{
-  "question": "What is the definition of force?",
-  "document_ids": ["doc_id_1", "doc_id_2"]
-}
-```
-
-**Response (200)**
-```json
-{
-  "success": true,
-  "message": "Query processed successfully",
-  "data": {
-    "answer": " ... ",
-    "context_found": true,
-    "used_documents": ["doc_id_1"]
-  }
-}
-```
-
----
-
-### `DELETE /rag/documents/{doc_id}`
-Delete a loose document + its Chroma collection + uploaded file.
-
-**Response (200)**
-```json
-{ "success": true, "message": "Document deleted successfully", "data": null }
 ```
 
 ---
@@ -323,6 +271,20 @@ Delete a loose document + its Chroma collection + uploaded file.
 
 ### `POST /rag/exams`
 Generate an exam from one Book and multiple chapter numbers.
+
+**`language` (exam output)**
+
+Controls the language of generated questions, MCQ options, short-answer expected answers, and explanations. Stored on the paper and returned on student/teacher views.
+
+| Output language | Accepted values (examples) |
+|-----------------|----------------------------|
+| English (default) | `English`, `english`, `en` |
+| Gujarati | `Gujarati`, `gujarati`, `gu` |
+| Hindi | `Hindi`, `hindi`, `hi` |
+
+Names are matched case-insensitively; short aliases normalize to the canonical names **English**, **Gujarati**, and **Hindi**. Hindi prompts request Devanagari script; Gujarati prompts request Gujarati script.
+
+Omit `language` to default to English. Unsupported values return **`422` Validation error** with a message such as: `Unsupported exam output language 'fr'. Use English, Gujarati, or Hindi (aliases: en, gu, hi).`
 
 **Body (JSON)**
 ```json
@@ -335,14 +297,17 @@ Generate an exam from one Book and multiple chapter numbers.
     { "type": "short_answer", "count": 5, "marks_each": 2 }
   ],
   "difficulty": "medium",
-  "language": "en",
+  "language": "English",
   "standard": "10",
   "subject": "Science",
   "per_chapter_distribution": "proportional"
 }
 ```
 
-**Response (202)**
+For the same paper in Hindi or Gujarati, set `"language": "hi"` or `"language": "Gujarati"` (or `en` / `gu`).
+
+**Response (202)** — returns a full exam row (generation runs in the background). Clients should track `status` with **`GET /rag/exams/{exam_id}/wait`** (long-poll; recommended) or occasional **`GET /rag/exams/{exam_id}`** until `completed` or `failed`, then call the paper/answer-key endpoints.
+
 ```json
 {
   "success": true,
@@ -350,23 +315,33 @@ Generate an exam from one Book and multiple chapter numbers.
   "data": {
     "id": "exam_id",
     "book_id": "book_id",
+    "title": "Chapter 5 and 6 Unit Test",
+    "spec": { },
+    "paper": null,
+    "total_marks": 0,
     "status": "pending",
-    "paper": null
+    "error_message": null,
+    "created_at": "2026-04-29T00:00:00+00:00",
+    "updated_at": "2026-04-29T00:00:00+00:00"
   }
 }
 ```
 
 **Error examples**
 - `404` book not found
-- `400` chapters not found or not processed yet
+- `400` chapters missing from the book
 ```json
-{ "success": false, "message": "Chapters not yet processed: [6]. Process them first.", "data": null }
+{ "success": false, "message": "Chapters not found in this book: [99]", "data": null }
+```
+- `400` chapters not yet processed
+```json
+{ "success": false, "message": "Chapters not yet processed: [6]. Process them before requesting an exam.", "data": null }
 ```
 
 ---
 
 ### `GET /rag/exams/{exam_id}`
-Get exam status and full stored record (paper included after completion).
+Get exam status and full stored record (paper included after completion). Use this for a **single** snapshot (refresh, debugging). While generation is in progress, calling it in a tight loop creates unnecessary load; prefer **`GET /rag/exams/{exam_id}/wait`** (long-poll, documented in the next section) for polling.
 
 **Response (200)**
 ```json
@@ -381,6 +356,36 @@ Get exam status and full stored record (paper included after completion).
   }
 }
 ```
+
+---
+
+### `GET /rag/exams/{exam_id}/wait`
+Long-poll exam status so clients avoid tight `GET /rag/exams/{exam_id}` loops. The handler re-reads the database every `interval` seconds (default **1**, min **0.5**, max **5**) until the exam is no longer `pending` or `generating`, or until `timeout` seconds elapse (default **30**, min **1**, max **45**).
+
+**Example**
+
+```http
+GET /rag/exams/7f807882-14d7-41e9-af2a-5d617f2d9161/wait?timeout=38&interval=1
+```
+
+**Query parameters**
+
+| Name | Default | Range | Meaning |
+|------|---------|-------|---------|
+| `timeout` | 30 | 1–45 | Maximum seconds to keep the request open. |
+| `interval` | 1 | 0.5–5 | Sleep between DB checks while still pending/generating. |
+
+**Response (200) — terminal status (`completed` or `failed`)**
+
+Same `data` shape as `GET /rag/exams/{exam_id}`; `message` is `Exam fetched successfully`.
+
+**Response (200) — still `pending` or `generating` after `timeout`**
+
+Same `data` shape as above (current row); `message` is `Exam generation still in progress`. The client should call this endpoint again (or use `GET /rag/exams/{exam_id}`) until status settles.
+
+**Error**
+
+- `404` exam not found
 
 ---
 
@@ -402,7 +407,7 @@ Delete an exam by id (works for pending/generating/completed/failed records).
 ---
 
 ### `GET /rag/exams/{exam_id}/paper`
-Student-facing exam paper view (no answers/explanations leaked).
+Student-facing exam paper view (no answers/explanations leaked). Only available when the exam status is **`completed`** and a `paper` exists.
 
 **Response (200)**
 ```json
@@ -411,7 +416,10 @@ Student-facing exam paper view (no answers/explanations leaked).
   "message": "Paper fetched successfully",
   "data": {
     "exam_id": "exam_id",
+    "book": { "id": "book_id", "title": "Class 10 Science NCERT" },
     "total_marks": 20,
+    "difficulty": "medium",
+    "language": "English",
     "sections": [
       {
         "title": "Section: MCQ (10 x 1 marks = 10 marks)",
@@ -420,6 +428,7 @@ Student-facing exam paper view (no answers/explanations leaked).
         "questions": [
           {
             "q_no": 1,
+            "type": "mcq",
             "chapter_number": 5,
             "chapter_title": " ... ",
             "question": " ... ",
@@ -431,6 +440,46 @@ Student-facing exam paper view (no answers/explanations leaked).
     ]
   }
 }
+```
+
+**Error**
+- `409` exam not finished yet (e.g. still `pending` or `generating`)
+```json
+{ "success": false, "message": "Exam is 'generating', not yet completed.", "data": null }
+```
+
+---
+
+### `GET /rag/exams/{exam_id}/answer-key`
+Teacher-facing answer key (correct options, expected short answers, explanations). Same completion requirement as the paper endpoint.
+
+**Response (200)**
+```json
+{
+  "success": true,
+  "message": "Answer key fetched successfully",
+  "data": {
+    "exam_id": "exam_id",
+    "total_marks": 20,
+    "answers": [
+      {
+        "q_no": 1,
+        "type": "mcq",
+        "chapter_number": 5,
+        "marks": 1,
+        "correct_index": 2,
+        "correct_option": "C",
+        "explanation": " ..."
+      }
+    ]
+  }
+}
+```
+
+**Error**
+- `409` exam not finished yet
+```json
+{ "success": false, "message": "Exam is 'pending', not yet completed.", "data": null }
 ```
 
 ---
@@ -457,39 +506,11 @@ Create a subject.
 Update an existing subject.
 
 ### `DELETE /rag/subjects/{subject_id}`
-Delete a subject (fails if linked books exist).
+Delete a subject. Fails if any book’s subject name matches this subject (case-insensitive).
 
 **Error**
-- `409` exam not completed yet
+- `409` subject has linked books
 ```json
-{ "success": false, "message": "Exam is 'generating', not yet completed.", "data": null }
-```
-
----
-
-### `GET /rag/exams/{exam_id}/answer-key`
-Teacher-facing answer key view.
-
-**Response (200)**
-```json
-{
-  "success": true,
-  "message": "Answer key fetched successfully",
-  "data": {
-    "exam_id": "exam_id",
-    "total_marks": 20,
-    "answers": [
-      {
-        "q_no": 1,
-        "type": "mcq",
-        "chapter_number": 5,
-        "marks": 1,
-        "correct_index": 2,
-        "correct_option": "C",
-        "explanation": " ..."
-      }
-    ]
-  }
-}
+{ "success": false, "message": "Cannot delete subject. 3 book(s) are linked to it.", "data": null }
 ```
 

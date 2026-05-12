@@ -66,8 +66,8 @@ class Document(Base):
     Two flavours:
     - Chapter document: ``book_id`` and ``chapter_number`` are set; chunks
       are tagged with that chapter number for exam generation.
-    - Loose document: ``book_id`` is null; treated as a free-form RAG file
-      for the legacy ``/rag/query`` endpoint.
+    - Standalone document: ``book_id`` is null; a free-form RAG file not
+      tied to a book chapter (no HTTP API in this app; data model only).
     """
 
     __tablename__ = "documents"

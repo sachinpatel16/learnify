@@ -99,9 +99,19 @@ def _build_system_prompt(spec: ExamSpec, book: dict, chapter_title: str) -> str:
     subject = spec.subject or book.get("subject") or "general"
     board = book.get("board")
     where = f"Class {standard}" + (f" {board}" if board else "")
+    lang = spec.language
+    script_rule = (
+        "Latin script appropriate for English."
+        if lang == "English"
+        else (
+            "Devanagari script for all Hindi content."
+            if lang == "Hindi"
+            else "Gujarati script for all Gujarati content."
+        )
+    )
     return (
         f"You are an experienced exam paper setter for {where} {subject}, "
-        f"working in {spec.language}.\n\n"
+        f"setting papers in {lang}.\n\n"
         f"Chapter: {chapter_title}\n"
         f"Difficulty: {spec.difficulty}\n\n"
         "Rules for every question:\n"
@@ -115,7 +125,10 @@ def _build_system_prompt(spec: ExamSpec, book: dict, chapter_title: str) -> str:
         "5. Do not copy more than 6 consecutive words verbatim from the text "
         "(paraphrase instead).\n"
         "6. Do not produce duplicates or near-duplicates.\n"
-        "7. Return JSON matching the schema exactly."
+        f"7. Write every question stem, every MCQ option, every short-answer "
+        f"expected_answer, and every MCQ explanation entirely in {lang}, using "
+        f"{script_rule}\n"
+        "8. Return JSON matching the schema exactly."
     )
 
 

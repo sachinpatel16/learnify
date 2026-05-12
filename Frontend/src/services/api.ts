@@ -171,6 +171,20 @@ class APIService {
     return this.request(`/rag/exams/${examId}`);
   }
 
+  /** Long-poll exam status (server holds until completed/failed or timeout). */
+  async waitExam(
+    examId: string,
+    options?: { timeout?: number; interval?: number }
+  ): Promise<Exam> {
+    const timeout = options?.timeout ?? 38;
+    const interval = options?.interval ?? 1;
+    const params = new URLSearchParams({
+      timeout: String(timeout),
+      interval: String(interval),
+    });
+    return this.request(`/rag/exams/${examId}/wait?${params.toString()}`);
+  }
+
   async getExamPaper(examId: string): Promise<ExamPaperView> {
     return this.request(`/rag/exams/${examId}/paper`);
   }
@@ -185,15 +199,13 @@ class APIService {
 
   async pollExamUntilSettled(
     examId: string,
-    onUpdate?: (exam: Exam) => void,
-    intervalMs = 2500
+    onUpdate?: (exam: Exam) => void
   ): Promise<Exam> {
     let current = await this.getExam(examId);
     onUpdate?.(current);
 
     while (current.status === 'pending' || current.status === 'generating') {
-      await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
-      current = await this.getExam(examId);
+      current = await this.waitExam(examId, { timeout: 38, interval: 1 });
       onUpdate?.(current);
     }
 

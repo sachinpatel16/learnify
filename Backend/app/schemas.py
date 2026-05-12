@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
 def _utc_iso(dt: datetime | None) -> str | None:
@@ -146,6 +146,33 @@ QuestionType = Literal["mcq", "short_answer"]
 Difficulty = Literal["easy", "medium", "hard"]
 ChapterDistribution = Literal["proportional", "evenly_split"]
 
+_EXAM_OUTPUT_LANGUAGE_ALIASES: dict[str, str] = {
+    "en": "English",
+    "english": "English",
+    "gu": "Gujarati",
+    "gujarati": "Gujarati",
+    "hi": "Hindi",
+    "hindi": "Hindi",
+}
+_EXAM_OUTPUT_LANGUAGES_CANONICAL = frozenset({"English", "Gujarati", "Hindi"})
+
+
+def canonical_exam_output_language(value: str) -> str:
+    """Normalize request language to English, Gujarati, or Hindi; raise if unsupported."""
+    s = (value or "").strip()
+    if not s:
+        return "English"
+    lowered = s.lower().replace("-", "_")
+    if lowered in _EXAM_OUTPUT_LANGUAGE_ALIASES:
+        return _EXAM_OUTPUT_LANGUAGE_ALIASES[lowered]
+    titled = " ".join(w.capitalize() for w in s.replace("-", " ").split())
+    if titled in _EXAM_OUTPUT_LANGUAGES_CANONICAL:
+        return titled
+    raise ValueError(
+        f"Unsupported exam output language {value!r}. "
+        "Use English, Gujarati, or Hindi (aliases: en, gu, hi)."
+    )
+
 
 class ExamSection(BaseModel):
     """One section of the requested paper, e.g. '10 MCQs worth 1 mark each'."""
@@ -167,7 +194,10 @@ class ExamSpec(BaseModel):
     )
     sections: list[ExamSection] = Field(..., min_length=1)
     difficulty: Difficulty = "medium"
-    language: str = "en"
+    language: str = Field(
+        default="English",
+        description="Language for all generated questions, options, answers, and explanations.",
+    )
     standard: Optional[str] = None
     subject: Optional[str] = None
     per_chapter_distribution: ChapterDistribution = Field(
@@ -178,6 +208,11 @@ class ExamSpec(BaseModel):
             "'evenly_split' assigns the same count to each chapter."
         ),
     )
+
+    @field_validator("language")
+    @classmethod
+    def _normalize_exam_language(cls, v: str) -> str:
+        return canonical_exam_output_language(v)
 
 
 class MCQ(BaseModel):

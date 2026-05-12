@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   AlertCircle,
   CheckCircle2,
@@ -23,6 +24,14 @@ import {
   ExamPaperView,
   ExamSectionInput,
 } from '../../types';
+
+const EXAM_OUTPUT_LANGUAGE_LABELS = {
+  english: 'English',
+  gujarati: 'Gujarati',
+  hindi: 'Hindi',
+} as const;
+
+type ExamOutputLanguageKey = keyof typeof EXAM_OUTPUT_LANGUAGE_LABELS;
 
 const escapeHtml = (value: unknown) =>
   String(value ?? '')
@@ -244,6 +253,7 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
   const [examTitle, setExamTitle] = useState('');
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [distribution, setDistribution] = useState<'proportional' | 'evenly_split'>('proportional');
+  const [examPaperLanguage, setExamPaperLanguage] = useState<ExamOutputLanguageKey>('english');
   const [sections, setSections] = useState<ExamSectionInput[]>([
     { type: 'mcq', count: 5, marks_each: 1 },
     { type: 'short_answer', count: 3, marks_each: 2 },
@@ -254,8 +264,37 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
     [exams, selectedExamId]
   );
 
-  const loadBook = useCallback(async () => {
-    setLoading(true);
+  const selectableChapterNumbers = useMemo(() => {
+    if (!book) return [] as number[];
+    return [
+      ...new Set(
+        book.chapters
+          .filter((c) => c.is_processed && c.chapter_number != null)
+          .map((c) => Number(c.chapter_number))
+      ),
+    ].sort((a, b) => a - b);
+  }, [book]);
+
+  const allSelectableChaptersSelected =
+    selectableChapterNumbers.length > 0 &&
+    selectableChapterNumbers.every((n) => selectedChapters.includes(n));
+  const someSelectableChaptersSelected = selectableChapterNumbers.some((n) =>
+    selectedChapters.includes(n)
+  );
+
+  const selectAllChaptersRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const el = selectAllChaptersRef.current;
+    if (el) {
+      el.indeterminate = someSelectableChaptersSelected && !allSelectableChaptersSelected;
+    }
+  }, [someSelectableChaptersSelected, allSelectableChaptersSelected]);
+
+  const loadBook = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const [bookResult, examResult] = await Promise.all([
@@ -280,7 +319,9 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load book details');
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [bookId]);
 
@@ -410,6 +451,7 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
   };
 
   const handleGenerateExam = async () => {
+    if (generatingExam) return;
     if (!book || selectedChapters.length === 0) {
       setError('Select at least one processed chapter before generating an exam.');
       return;
@@ -419,10 +461,12 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
       return;
     }
 
-    setGeneratingExam(true);
-    setError(null);
-    setExamPaper(null);
-    setAnswerKey(null);
+    flushSync(() => {
+      setGeneratingExam(true);
+      setError(null);
+      setExamPaper(null);
+      setAnswerKey(null);
+    });
 
     try {
       const created = await apiService.createExam({
@@ -431,7 +475,7 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
         chapters: selectedChapters.sort((a, b) => a - b),
         sections,
         difficulty,
-        language: book.language || 'en',
+        language: EXAM_OUTPUT_LANGUAGE_LABELS[examPaperLanguage],
         standard: book.standard || undefined,
         subject: book.subject || undefined,
         per_chapter_distribution: distribution,
@@ -453,7 +497,7 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
       ]);
       setExamPaper(paper);
       setAnswerKey(key);
-      await loadBook();
+      await loadBook({ silent: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate exam');
     } finally {
@@ -782,7 +826,31 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
 
           <section className="card">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold">Chapters</h3>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {book.chapters.length > 0 && (
+                  <input
+                    ref={selectAllChaptersRef}
+                    aria-label="Select all chapters"
+                    title="Select all chapters"
+                    checked={allSelectableChaptersSelected}
+                    className="h-4 w-4 shrink-0"
+                    disabled={selectableChapterNumbers.length === 0}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        setSelectedChapters((current) =>
+                          [...new Set([...current, ...selectableChapterNumbers])].sort((a, b) => a - b)
+                        );
+                      } else {
+                        setSelectedChapters((current) =>
+                          current.filter((n) => !selectableChapterNumbers.includes(n))
+                        );
+                      }
+                    }}
+                    type="checkbox"
+                  />
+                )}
+                <h3 className="text-lg font-semibold">Chapters</h3>
+              </div>
               <span className="text-sm text-gray-500 dark:text-gray-400">{book.chapters.length}</span>
             </div>
 
@@ -866,7 +934,7 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
               <h3 className="text-lg font-semibold">Generate Exam</h3>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <label className="text-sm">
                 <span className="mb-1 block text-gray-600 dark:text-gray-300">Difficulty</span>
                 <select
@@ -890,7 +958,21 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
                   <option value="evenly_split">Evenly split</option>
                 </select>
               </label>
-              <label className="text-sm md:col-span-2">
+              <label className="text-sm">
+                <span className="mb-1 block text-gray-600 dark:text-gray-300">Language</span>
+                <select
+                  className="input-field"
+                  value={examPaperLanguage}
+                  onChange={(event) =>
+                    setExamPaperLanguage(event.target.value as ExamOutputLanguageKey)
+                  }
+                >
+                  <option value="english">English</option>
+                  <option value="gujarati">Gujarati</option>
+                  <option value="hindi">Hindi</option>
+                </select>
+              </label>
+              <label className="text-sm md:col-span-3">
                 <span className="mb-1 block text-gray-600 dark:text-gray-300">Exam title</span>
                 <input
                   className="input-field"
@@ -943,8 +1025,11 @@ const BookDetailPage: React.FC<BookDetailPageProps> = ({ bookId, onBookUpdated }
                 Add Section
               </button>
               <button
-                className="btn-primary flex items-center gap-2 text-white disabled:text-white"
-                disabled={generatingExam || processedChapters.length === 0}
+                className={`btn-primary flex items-center gap-2 text-white disabled:text-white ${
+                  generatingExam ? 'pointer-events-none cursor-wait' : ''
+                }`}
+                aria-busy={generatingExam}
+                disabled={processedChapters.length === 0}
                 onClick={() => void handleGenerateExam()}
                 type="button"
               >

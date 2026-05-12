@@ -125,7 +125,7 @@ class RagPipeline:
         When ``chapter_number`` is supplied, every chunk is tagged with
         ``chapter_number`` / ``chapter_title`` so the exam generator can
         pull the chapter back via ``get_chapter_text``. When omitted, the
-        document is treated as a freeform RAG file (legacy ``/rag/query``).
+        document is treated as a freeform RAG file (no chapter metadata).
 
         Returns the collection name (vector namespace).
         """

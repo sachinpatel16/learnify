@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal, get_db
@@ -15,6 +16,7 @@ from app.response import (
     MSG_EXAM_CREATED,
     MSG_EXAM_DELETED,
     MSG_EXAM_FETCHED,
+    MSG_EXAM_WAIT_ONGOING,
     MSG_PAPER_FETCHED,
     success_response,
 )
@@ -144,6 +146,46 @@ def get_exam(exam_id: str, db: Session = Depends(get_db)):
     if exam is None:
         raise HTTPException(status_code=404, detail="Exam not found")
     return success_response(data=_exam_payload(exam), message=MSG_EXAM_FETCHED)
+
+
+@router.get("/exams/{exam_id}/wait")
+def wait_for_exam(
+    exam_id: str,
+    timeout: float = Query(default=30.0, ge=1.0, le=45.0, description="Max seconds to hold the request."),
+    interval: float = Query(
+        default=1.0,
+        ge=0.5,
+        le=5.0,
+        description="Seconds between database checks while status is pending or generating.",
+    ),
+):
+    """Long-poll exam status: returns when completed/failed or after ``timeout`` with current row.
+
+    Uses a fresh DB session per check so a single slow client does not pin one connection
+    for the entire wait window.
+    """
+    deadline = time.monotonic() + timeout
+    last_payload: dict | None = None
+
+    while True:
+        db = SessionLocal()
+        try:
+            exam = db.query(Exam).filter(Exam.id == exam_id).first()
+            if exam is None:
+                raise HTTPException(status_code=404, detail="Exam not found")
+            last_payload = _exam_payload(exam)
+            if exam.status not in ("pending", "generating"):
+                return success_response(data=last_payload, message=MSG_EXAM_FETCHED)
+        finally:
+            db.close()
+
+        now = time.monotonic()
+        if now >= deadline:
+            return success_response(data=last_payload, message=MSG_EXAM_WAIT_ONGOING)
+
+        sleep_for = min(interval, max(0.0, deadline - now))
+        if sleep_for > 0:
+            time.sleep(sleep_for)
 
 
 @router.delete("/exams/{exam_id}")

@@ -99,9 +99,9 @@ const Layout: React.FC<LayoutProps> = ({ children, currentPage, onPageChange }) 
             })}
           </nav>
           <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-            <div className="rounded-lg bg-gray-50 dark:bg-white/5 px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
+            {/* <div className="rounded-lg bg-gray-50 dark:bg-white/5 px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
               Backend base URL comes from `VITE_API_BASE_URL` and all requests target the current `/rag/*` flow.
-            </div>
+            </div> */}
             <div className="pt-3">
               <ThemeToggle showLabel />
             </div>
